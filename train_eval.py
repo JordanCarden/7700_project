@@ -33,7 +33,7 @@ from data_loader import (
     TEPDataset,
     load_spvariation_normal_data,
     RANDOM_SEED,
-    append_mode_one_hot
+    load_transition_samples
 )
 
 
@@ -383,8 +383,6 @@ def train_mode_model_with_per_mode_scaler(
 
     # Load clean normal data for this mode (SpVariation magnitude 100)
     data = load_spvariation_normal_data(mode, setpoint=1, magnitude=100, use_additional_meas=False)
-    mode_labels = np.full(len(data), mode)
-    data = append_mode_one_hot(data, mode_labels)
 
     # Split and fit scaler on train split only
     X_train, _ = train_test_split(
@@ -458,6 +456,52 @@ def train_mode_models_with_per_mode_scalers(
         mode_scalers[mode] = scaler
 
     return mode_models, mode_scalers
+
+
+def build_global_train_loader_with_transitions(
+    train_loader: DataLoader,
+    scaler: StandardScaler,
+    batch_size: int,
+    num_workers: int,
+    include_transitions: bool = True
+) -> DataLoader:
+    """
+    Build a global train DataLoader, optionally augmented with transition samples.
+
+    Per-mode models should continue to use the original train_loader.
+    """
+    if not include_transitions:
+        return train_loader
+
+    # Base normalized arrays
+    base_X = train_loader.dataset.X.cpu().numpy()
+    base_y = train_loader.dataset.y.cpu().numpy()
+    base_modes = train_loader.dataset.mode_labels.cpu().numpy()
+    base_faults = train_loader.dataset.fault_labels.cpu().numpy()
+
+    # Load even-indexed transition samples and scale with the global scaler
+    trans_X_raw, trans_modes, trans_faults = load_transition_samples(index_mode="even")
+    if trans_X_raw.size == 0:
+        return train_loader
+
+    trans_X = scaler.transform(trans_X_raw)
+    trans_y = np.zeros(len(trans_X), dtype=float)
+
+    # Concatenate
+    X_all = np.vstack([base_X, trans_X])
+    y_all = np.concatenate([base_y, trans_y])
+    modes_all = np.concatenate([base_modes, trans_modes])
+    faults_all = np.concatenate([base_faults, trans_faults])
+
+    dataset = TEPDataset(X_all, y_all, modes_all, faults_all)
+    global_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True if torch.cuda.is_available() else False
+    )
+    return global_loader
 
 
 def compare_models(
@@ -674,7 +718,17 @@ def main():
         sp_magnitudes=[100]  # Use nominal (100%) setpoints only
     )
 
-    input_dim = next(iter(train_loader))['X'].shape[1]
+    # Build global train loader augmented with transition samples (even indices only)
+    print("\nStep 1b: Building global train loader with transition exposure (even-indexed samples only)...")
+    global_train_loader = build_global_train_loader_with_transitions(
+        train_loader,
+        scaler,
+        batch_size=train_loader.batch_size,
+        num_workers=train_loader.num_workers,
+        include_transitions=True
+    )
+
+    input_dim = next(iter(global_train_loader))['X'].shape[1]
     print(f"Input dimension: {input_dim}")
 
     # Train global model
@@ -684,7 +738,7 @@ def main():
     global_model = Autoencoder(input_dim)
     global_model, global_loss = train_autoencoder(
         global_model,
-        train_loader,
+        global_train_loader,
         num_epochs=50,
         save_path="global_autoencoder.pth"
     )

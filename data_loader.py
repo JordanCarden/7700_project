@@ -76,6 +76,75 @@ def append_mode_one_hot(
     return np.hstack([data, one_hot])
 
 
+def load_transition_samples(
+    modes: List[int] = MODES,
+    index_mode: str = "even"
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load transition trajectory samples for global-model training.
+
+    Each available ModeXToModeY/TransitionTime{10,20,30,40} trajectory
+    is a single run. We downsample by index parity to keep train/eval disjoint.
+
+    Args:
+        modes: List of modes to consider (sources and targets)
+        index_mode: "even" to take samples [::2], "odd" to take samples [1::2]
+
+    Returns:
+        data: (N, features) process variables (time column dropped)
+        mode_labels: (N,) destination mode id for stratification/metadata
+        fault_labels: (N,) zeros (treated as normal)
+    """
+    assert index_mode in ("even", "odd"), "index_mode must be 'even' or 'odd'"
+    start_idx = 0 if index_mode == "even" else 1
+
+    all_data = []
+    all_modes = []
+    all_faults = []
+
+    for src_mode in modes:
+        file_path = f"{DATA_PATH}/TEP_Mode{src_mode}.h5"
+        if not Path(file_path).exists():
+            continue
+
+        with h5py.File(file_path, "r") as f:
+            base = f.get(f"Mode{src_mode}/ModeTransition/SimulationCompleted", None)
+            if base is None:
+                continue
+
+            for tgt_mode in modes:
+                if tgt_mode == src_mode:
+                    continue
+
+                group = f"Mode{src_mode}/ModeTransition/SimulationCompleted/Mode{src_mode}ToMode{tgt_mode}"
+                if group not in f:
+                    continue
+
+                for trans_time in f[group].keys():
+                    path = f"{group}/{trans_time}"
+                    if f[path].get("processdata") is None:
+                        continue
+
+                    processdata = f[path]["processdata"][:]
+                    data = processdata[start_idx::2, 1:]  # drop time, parity slice
+
+                    if data.size == 0:
+                        continue
+
+                    all_data.append(data)
+                    all_modes.extend([tgt_mode] * data.shape[0])
+                    all_faults.extend([0] * data.shape[0])
+
+    if not all_data:
+        return np.empty((0, 0)), np.array([]), np.array([])
+
+    data_array = np.vstack(all_data)
+    mode_labels = np.array(all_modes, dtype=int)
+    fault_labels = np.array(all_faults, dtype=int)
+
+    return data_array, mode_labels, fault_labels
+
+
 def load_tep_simulation(
     mode: int,
     fault_type: int,
@@ -573,7 +642,8 @@ def prepare_data(
     preprocessed_path: str = "preprocessed_data.pkl",
     stratified_fault_sampling: bool = True,
     fault_sample_timepoints: Optional[List[float]] = None,
-    fault_sample_runs: Optional[List[int]] = None
+    fault_sample_runs: Optional[List[int]] = None,
+    use_mode_one_hot: bool = False
 ) -> Tuple[DataLoader, DataLoader, StandardScaler]:
     """
     Main function to prepare all data: extract, split, normalize, and create dataloaders.
@@ -589,6 +659,7 @@ def prepare_data(
         stratified_fault_sampling: If True, use stratified sampling for fault data (default: True)
         fault_sample_timepoints: Specific timepoints to sample (default: [70, 75, 80, 85, 90])
         fault_sample_runs: Specific runs to sample from (default: [1, 2, 3, 4, 5])
+        use_mode_one_hot: If True, append one-hot mode indicators to feature vectors
 
     Returns:
         Tuple of (train_loader, test_loader, scaler)
@@ -618,9 +689,9 @@ def prepare_data(
         sample_runs=fault_sample_runs
     )
 
-    # Append mode one-hot columns to both normal and fault data
-    normal_data = append_mode_one_hot(normal_data, normal_modes)
-    fault_data = append_mode_one_hot(fault_data, fault_modes)
+    if use_mode_one_hot:
+        normal_data = append_mode_one_hot(normal_data, normal_modes)
+        fault_data = append_mode_one_hot(fault_data, fault_modes)
 
     # Create train/test split
     data_splits = create_train_test_split(

@@ -5,9 +5,10 @@ This project tests whether a single, product-agnostic (global) anomaly detector 
 
 ## Data & Defaults
 - **Dataset**: Extended TEP at `/home/admin/gdrive/TEP_Dataset` (HDF5). Modes used: 1, 3, 5.
-- **Features**: Process variables (time column dropped) plus appended one-hot mode indicators.
+- **Features**: Process variables (time column dropped). Mode labels are kept separately for stratification/metadata, not appended as features.
 - **Normal data (default)**: Dedicated SpVariation normal runs (`SpVariation/SimulationCompleted/SP1/tRamp_0/SpMagnitude100`) — clean, no faults injected.
 - **Fault data (default)**: Stratified sampling from fault runs, excluding IDV6. Samples are taken at timepoints `[70, 75, 80, 85, 90]` from runs `[1..5]`; each sample is the midpoint of a small ±0.1h window.
+- **Transitions (global model only)**: Even-indexed samples from available transition trajectories between modes (e.g., Mode1→3, Mode3→1, Mode1→5, etc.) are added to the global model’s training set. Per-mode models do not see transition data; mode detection uses the complementary odd-indexed samples.
 - **Alternatives**:
   - Set `use_dedicated_normal=False` in `prepare_data` to use pre-fault windows (hours 0–20) from fault runs.
   - Set `stratified_fault_sampling=False` to pull full post-fault windows (hours 70–90) from 10 runs per fault type.
@@ -15,7 +16,6 @@ This project tests whether a single, product-agnostic (global) anomaly detector 
 ## Pipeline Summary
 1. **Data prep (`data_loader.py`)**
    - Extract normal and fault data using the defaults above.
-   - Append mode one-hot columns.
    - Split: 2/3 of normal for training; test = remaining normal + all fault (stratified by mode).
    - Fit `StandardScaler` on the training split; apply to train/test; save as `scaler.pkl`.
    - Persist normalized splits to `preprocessed_data.pkl`.

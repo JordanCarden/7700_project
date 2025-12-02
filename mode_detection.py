@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from train_eval import Autoencoder
-from data_loader import append_mode_one_hot, MODES
+from data_loader import MODES
 
 # Configuration
 DATA_PATH = "/home/admin/gdrive/TEP_Dataset"
@@ -51,8 +51,6 @@ def load_normal_data_with_time(mode: int):
         time = processdata[:, 0]
         data = processdata[:, 1:]
 
-    mode_labels = np.full(len(data), mode)
-    data = append_mode_one_hot(data, mode_labels, modes=MODES)
     return time, data
 
 
@@ -96,6 +94,7 @@ def load_mode_change_data(from_mode: int, to_mode: int):
 def load_transition_data(from_mode: int, to_mode: int, transition_time: int = 20):
     """
     Load the actual transition trajectory from from_mode -> to_mode.
+    Returns odd-indexed samples only (even indices reserved for training).
     """
     file_path = f"{DATA_PATH}/TEP_Mode{from_mode}.h5"
     path = (f'Mode{from_mode}/ModeTransition/SimulationCompleted/'
@@ -113,10 +112,24 @@ def load_transition_data(from_mode: int, to_mode: int, transition_time: int = 20
         time = processdata[:, 0]
         data = processdata[:, 1:]
 
-    # Tag with the actual mode being produced (to_mode) so one-hot reflects the data source,
-    # not the expected mode.
-    mode_labels = np.full(len(data), to_mode)
-    data = append_mode_one_hot(data, mode_labels, modes=MODES)
+    # Use odd-indexed samples for evaluation
+    time = time[1::2]
+    data = data[1::2]
+
+    # Trim out pre-ramp portion so metrics focus on the actual mode change
+    if len(time) > 0:
+        base_mask = time < 10
+        base_mean = data[base_mask].mean(axis=0) if base_mask.any() else data.mean(axis=0)
+        dist = np.linalg.norm(data - base_mean, axis=1)
+        base_std = dist[base_mask].std() if base_mask.any() else dist.std()
+        threshold = base_mean_dist = dist[base_mask].mean() if base_mask.any() else dist.mean()
+        threshold += max(5 * base_std, base_mean_dist * 5)
+        ramp_idx = np.argmax(dist > threshold)
+        if dist[ramp_idx] <= threshold:
+            ramp_idx = 0
+        time = time[ramp_idx:]
+        data = data[ramp_idx:]
+
     return time, data
 
 
@@ -125,8 +138,7 @@ def get_mode_change_timeseries(expected_mode: int, actual_mode: int, use_transit
     Return (time, data, source_tag) for a mode change scenario.
 
     If use_transitions and a transition path exists, use it. Otherwise fall back
-    to steady-state normal data from the actual_mode (no timestamps available,
-    so synthesize a simple time axis).
+    to steady-state normal data from the actual_mode (no timestamps available).
     """
     if use_transitions and expected_mode != actual_mode:
         try:
@@ -140,12 +152,6 @@ def get_mode_change_timeseries(expected_mode: int, actual_mode: int, use_transit
     else:
         time, data = load_mode_change_data(expected_mode, actual_mode)
         source = "steady_state"
-
-    # Overwrite the one-hot columns to reflect the EXPECTED mode, not the actual.
-    one_hot = np.zeros((len(data), len(MODES)))
-    expected_idx = MODES.index(expected_mode)
-    one_hot[:, expected_idx] = 1.0
-    data[:, -len(MODES):] = one_hot
 
     return time, data, source
 
@@ -397,7 +403,7 @@ def visualize_results(results):
 
     plt.tight_layout()
     save_path = RESULTS_DIR / 'blind_spot_proper_threshold.png'
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.savefig(save_path, dpi=600, bbox_inches='tight')
     print(f"\n✓ Saved visualization: {save_path}")
     plt.close()
 
@@ -496,7 +502,7 @@ def visualize_reconstruction_errors(models, thresholds, per_mode_scalers, use_tr
 
     plt.tight_layout()
     save_path = RESULTS_DIR / 'blind_spot_error_distributions.png'
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.savefig(save_path, dpi=600, bbox_inches='tight')
     print(f"✓ Saved error distributions: {save_path}")
     plt.close()
 
@@ -603,7 +609,7 @@ def visualize_reconstruction_errors_over_time(models, thresholds, per_mode_scale
 
     plt.tight_layout()
     save_path = RESULTS_DIR / 'reconstruction_error_over_time.png'
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.savefig(save_path, dpi=600, bbox_inches='tight')
     print(f"✓ Saved error over time plot: {save_path}")
     plt.close()
 

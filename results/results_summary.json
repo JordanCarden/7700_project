@@ -1,8 +1,8 @@
 {
-  "global_f1": 0.5439560439560439,
-  "mode_avg_f1": 0.5262630239917917,
-  "global_roc_auc": 0.7286113861386139,
-  "mode_avg_roc_auc": 0.7176686901777756,
-  "f1_improvement": -3.2526561954483864,
-  "roc_auc_improvement": -1.5018562939059696
+  "global_f1": 0.4643245201014125,
+  "mode_avg_f1": 0.5321985667315222,
+  "global_roc_auc": 0.6804534653465346,
+  "mode_avg_roc_auc": 0.7219748854948668,
+  "f1_improvement": 14.617803646313018,
+  "roc_auc_improvement": 6.102021998989532
 }
